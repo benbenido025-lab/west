@@ -48,7 +48,7 @@ CLIPFLY_IMAGES_DIR = "generated_images"
 MAX_WAIT_TIME = 300  # Max wait time for generation in seconds
 CHECK_INTERVAL = 1   # Check interval in seconds
 
-# Gemini Configuration
+# Gemini Configuration - FIXED with better error handling
 GEMINI_PSID = os.environ.get('GEMINI_PSID', 'g.a0005ggAmSQ8j6IL_13zSYbl9_xfRi-mXizkeMzfKrSFMDSlWuIMMZrGoi27-FuUEAoAhgsNyQACgYKATMSAQ4SFQHGX2MinEiaOCQs23o3KTsd-_RU8BoVAUF8yKrJ7JeK7xunFi8-ayjO6W120076')
 GEMINI_AT = os.environ.get('GEMINI_AT', 'AEHmXlF7RcAGYtDwD99pG1H_Opg1:1769732062273')
 
@@ -82,7 +82,7 @@ executor = ThreadPoolExecutor(max_workers=10)
 
 logger = logging.getLogger(__name__)
 
-# Gemini Bot Class - OPTIMIZED for speed with conversation memory
+# Gemini Bot Class - FIXED with better 429 error handling and fallback
 class GeminiBot:
     def __init__(self, psid, at_token):
         self.url = "https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate"
@@ -104,13 +104,19 @@ class GeminiBot:
         self.req_id = random.randint(100000, 999999)
         self.timeout = 30  # Increased timeout for better connection
         self.conversation_memory = {}  # Store conversation history
+        self.last_request_time = 0  # For rate limiting
+        self.request_count = 0  # For rate limiting
         
     def parse_response_fast(self, text):
         """Fast parser for Gemini responses"""
         try:
             # Find the response in the text
             if not text:
-                return "I'm Gemini, ready to help! Please try your question again."
+                return "Hello! I'm Gemini, ready to help! Please try your question again."
+            
+            # Check for rate limit error
+            if "429" in text or "Too Many Requests" in text:
+                return "⚠️ Rate limit reached. Please wait a moment and try again."
             
             lines = text.split('\n')
             
@@ -151,10 +157,10 @@ class GeminiBot:
                 except:
                     pass
             
-            return "I'm Gemini, ready to help! Please try your question again."
+            return "Hello! I'm Gemini AI. How can I assist you today?"
             
         except Exception as e:
-            return f"Hello! I'm Gemini. Let's chat! (Error: {str(e)})"
+            return f"Hello! I'm Gemini AI assistant. Let's chat! (Error: {str(e)})"
     
     def build_conversation_context(self, conv_id, history, current_message):
         """Build context from conversation history for Gemini"""
@@ -190,8 +196,16 @@ class GeminiBot:
         
         return context
     
-    def chat_fast(self, message, max_retries=2, conv_id=None, history=None):
+    def chat_fast(self, message, max_retries=3, conv_id=None, history=None):
         """Fast chat method with retry logic and conversation context"""
+        current_time = time.time()
+        
+        # Rate limiting: wait 2 seconds between requests
+        if current_time - self.last_request_time < 2:
+            time.sleep(2)
+        
+        self.last_request_time = time.time()
+        
         for attempt in range(max_retries):
             try:
                 self.req_id += 10
@@ -215,6 +229,12 @@ class GeminiBot:
                     "at": self.at_token
                 }
                 
+                # Add delay for retries
+                if attempt > 0:
+                    wait_time = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
+                    print(f"Retry attempt {attempt + 1}/{max_retries}, waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                
                 response = self.session.post(
                     self.url, 
                     params=params, 
@@ -223,11 +243,19 @@ class GeminiBot:
                     timeout=self.timeout
                 )
                 
+                # Check for rate limiting
+                if response.status_code == 429:
+                    if attempt < max_retries - 1:
+                        print(f"Rate limited (429). Retrying in {5 * (attempt + 1)} seconds...")
+                        time.sleep(5 * (attempt + 1))
+                        continue
+                    return "⚠️ I'm getting rate limited. Please wait a moment before asking again."
+                
                 if response.status_code != 200:
                     if attempt < max_retries - 1:
-                        time.sleep(1)
+                        time.sleep(2)
                         continue
-                    return f"Hello! I'm Gemini. Let's chat! (Status: {response.status_code})"
+                    return f"Hello! I'm Gemini AI assistant. (Status: {response.status_code})"
                 
                 response_text = self.parse_response_fast(response.text)
                 
@@ -244,21 +272,27 @@ class GeminiBot:
                 
             except requests.exceptions.Timeout:
                 if attempt < max_retries - 1:
-                    time.sleep(1)
+                    wait_time = 2 * (attempt + 1)
+                    print(f"Timeout. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
                     continue
-                return "I'm Gemini! Let's have a conversation. What would you like to talk about?"
+                return "I'm Gemini AI! Let's have a conversation. What would you like to talk about?"
             except requests.exceptions.ConnectionError:
                 if attempt < max_retries - 1:
-                    time.sleep(2)
+                    wait_time = 3 * (attempt + 1)
+                    print(f"Connection error. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
                     continue
                 return "Connection error. Please check your internet connection."
             except Exception as e:
                 if attempt < max_retries - 1:
-                    time.sleep(1)
+                    wait_time = 1 * (attempt + 1)
+                    print(f"Error: {e}. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
                     continue
-                return f"Hi! I'm Gemini, ready to help. (Error: {str(e)})"
+                return f"Hi! I'm Gemini AI, ready to help. (Error: {str(e)})"
         
-        return "I'm Gemini! Let's have a conversation. What would you like to talk about?"
+        return "Hello! I'm Gemini AI assistant. How can I help you today?"
 
 # Initialize Gemini Bot
 gemini_bot = GeminiBot(GEMINI_PSID, GEMINI_AT)
