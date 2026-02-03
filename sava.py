@@ -7,7 +7,7 @@ app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
 
 # Gemini API Configuration
-GEMINI_API_KEY = "AIzaSyB4NIBy2VrvlmZoGXSHdHgrTHY5ax0uaD8"
+GEMINI_API_KEY = "AIzaSyDrs1h3Ks2DK58L0TQjVExPIWjxw4wvpFA"
 GEMINI_MODEL = "gemini-2.5-flash"
 
 # System Prompt
@@ -1266,3 +1266,4 @@ if __name__ == '__main__':
     print("Press Ctrl+C to stop")
     print("=" * 60)
     app.run(debug=True, host='0.0.0.0', port=5000)
+
