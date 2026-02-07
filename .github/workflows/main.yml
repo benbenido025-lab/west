@@ -26,10 +26,10 @@ jobs:
         run: |
           # Only create user if it doesn't already exist
           if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
-              $password = "ricardo159447"
+              $password = "Ricardo159447!"
               $securePass = ConvertTo-SecureString $password -AsPlainText -Force
               # Create user and add to groups
-              New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+              New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires -PasswordNeverExpires
               Add-LocalGroupMember -Group "Administrators" -Member "RDP"
               Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
               # Save credentials to GitHub environment
