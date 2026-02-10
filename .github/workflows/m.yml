@@ -62,7 +62,7 @@ EOF'
           
           sudo chmod +x /etc/xrdp/startwm.sh
           
-          # Optimize XRDP settings for better performance
+          # Optimize XRDP settings
           sudo sed -i 's/max_bpp=32/max_bpp=24/' /etc/xrdp/xrdp.ini
           sudo sed -i 's/xserverbpp=24/xserverbpp=24/' /etc/xrdp/xrdp.ini
           
@@ -88,10 +88,10 @@ EOF'
           # Set password
           echo "$USERNAME:$PASSWORD" | sudo chpasswd
           
-          # Add to sudo group for admin privileges
+          # Add to sudo group
           sudo usermod -aG sudo $USERNAME
           
-          # Save credentials to environment
+          # Save credentials
           echo "RDP_USERNAME=$USERNAME" >> $GITHUB_ENV
           echo "RDP_PASSWORD=$PASSWORD" >> $GITHUB_ENV
           
@@ -101,11 +101,9 @@ EOF'
         run: |
           echo "Installing Tailscale..."
           
-          # Add Tailscale repository
           curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
           curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
           
-          # Install Tailscale
           sudo apt-get update -qq
           sudo apt-get install -y -qq tailscale
           
@@ -117,10 +115,8 @@ EOF'
           
           HOSTNAME="ubuntu-rdp-$GITHUB_RUN_ID"
           
-          # Start Tailscale with auth key
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=$HOSTNAME
           
-          # Wait for IP assignment
           echo "Waiting for Tailscale IP..."
           RETRY=0
           MAX_RETRIES=20
@@ -144,9 +140,8 @@ EOF'
 
       - name: Verify RDP Service
         run: |
-          echo "Verifying XRDP service status..."
+          echo "Verifying XRDP service..."
           
-          # Check if XRDP is running
           if sudo systemctl is-active --quiet xrdp; then
             echo "✓ XRDP service is running"
           else
@@ -155,7 +150,6 @@ EOF'
             exit 1
           fi
           
-          # Check if port 3389 is listening
           if sudo netstat -tuln | grep -q ":3389"; then
             echo "✓ RDP port 3389 is listening"
           else
@@ -178,9 +172,8 @@ EOF'
           echo "║ OS         : Ubuntu $(lsb_release -rs)"
           echo "║ Duration   : 6 hours (360 minutes)"
           echo "╠════════════════════════════════════════════════════╣"
-          echo "║ Connect using: Remote Desktop Client              ║"
-          echo "║ Linux: rdesktop $TAILSCALE_IP"
-          echo "║ Windows: mstsc.exe /v:$TAILSCALE_IP"
+          echo "║ Connect using Remote Desktop Client:              ║"
+          echo "║ Address: $TAILSCALE_IP:3389"
           echo "╚════════════════════════════════════════════════════╝"
           echo ""
 
@@ -193,9 +186,6 @@ EOF'
           
           echo "Session started at $(date)"
           echo "Will run for $DURATION_MINUTES minutes (6 hours)"
-          echo "Session will end at $(date -d @$END_TIME)"
-          echo ""
-          echo "Press 'Cancel workflow' in GitHub Actions to terminate early"
           echo "========================================================"
           echo ""
           
@@ -209,25 +199,15 @@ EOF'
             ELAPSED_MIN=$((ELAPSED / 60))
             REMAINING_MIN=$((REMAINING / 60))
             
-            # Display status every minute
             if [ $((COUNTER % 60)) -eq 0 ]; then
-              echo "[$(date '+%H:%M:%S')] Session Active | Elapsed: ${ELAPSED_MIN}m | Remaining: ${REMAINING_MIN}m"
+              echo "[$(date '+%H:%M:%S')] Active | Elapsed: ${ELAPSED_MIN}m | Remaining: ${REMAINING_MIN}m"
               
-              # Show system resources every 5 minutes
               if [ $((COUNTER % 300)) -eq 0 ]; then
-                echo "  ├─ CPU Load: $(uptime | awk -F'load average:' '{print $2}')"
-                echo "  ├─ RAM Used: $(free -h | awk '/^Mem:/ {print $3 "/" $2}')"
-                echo "  └─ Disk Used: $(df -h / | awk 'NR==2 {print $3 "/" $2}')"
-              fi
-              
-              # Check for active RDP sessions
-              ACTIVE_SESSIONS=$(who | grep -c "pts" || true)
-              if [ $ACTIVE_SESSIONS -gt 0 ]; then
-                echo "  └─ Active connections: $ACTIVE_SESSIONS"
+                echo "  ├─ RAM: $(free -h | awk '/^Mem:/ {print $3 "/" $2}')"
+                echo "  └─ Disk: $(df -h / | awk 'NR==2 {print $3 "/" $2}')"
               fi
             fi
             
-            # Keep Tailscale alive
             if [ $((COUNTER % 120)) -eq 0 ]; then
               tailscale status > /dev/null 2>&1 || sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }}
             fi
@@ -239,12 +219,3 @@ EOF'
           echo ""
           echo "========================================================"
           echo "Session completed at $(date)"
-          echo "Total runtime: $DURATION_MINUTES minutes"
-          echo "========================================================"
-
-      - name: Cleanup (On Failure)
-        if: failure()
-        run: |
-          echo "Cleaning up after failure..."
-          sudo tailscale down || true
-          sudo systemctl stop xrdp || true
