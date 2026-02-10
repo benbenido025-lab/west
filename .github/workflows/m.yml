@@ -1,81 +1,250 @@
-name: RDP
-
+name: Ubuntu-RDP-6HR
 on:
   workflow_dispatch:
+    inputs:
+      session_duration:
+        description: 'Session duration (minutes)'
+        required: false
+        default: '360'
 
 jobs:
-  secure-rdp:
-    runs-on: windows-latest
-    timeout-minutes: 3600
-
+  ubuntu-rdp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
     steps:
-      - name: Configure Core RDP Settings
+      - name: System Information
         run: |
-          # Enable Remote Desktop
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          # Disable Network Level Authentication
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-          # Remove any existing firewall rule to avoid duplication
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          # Allow incoming RDP connections on port 3389
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
-          # Restart Remote Desktop service
-          Restart-Service -Name TermService -Force
-      - name: Create RDP User with Secure Password
+          echo "================================"
+          echo "    SYSTEM SPECIFICATIONS"
+          echo "================================"
+          echo "OS: $(lsb_release -d | cut -f2)"
+          echo "Kernel: $(uname -r)"
+          echo "CPU: $(lscpu | grep 'Model name' | cut -d ':' -f2 | xargs)"
+          echo "Cores: $(nproc)"
+          echo "RAM: $(free -h | awk '/^Mem:/ {print $2}')"
+          echo "Disk: $(df -h / | awk 'NR==2 {print $2}')"
+          echo "Free Space: $(df -h / | awk 'NR==2 {print $4}')"
+          echo "================================"
+
+      - name: Update System & Install XFCE Desktop
         run: |
-          # Only create user if it doesn't already exist
-          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
-              $password = "Ricardo159447!"
-              $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-              # Create user and add to groups
-              New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires -PasswordNeverExpires
-              Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-              Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-              # Save credentials to GitHub environment
-              echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
-          } else {
-              Write-Host "User 'RDP' already exists. Skipping creation."
-          }
+          echo "Updating package lists..."
+          sudo apt-get update -qq
+          
+          echo "Installing XFCE desktop environment (lightweight)..."
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            xfce4 \
+            xfce4-goodies \
+            dbus-x11 \
+            xorg \
+            xrdp \
+            firefox \
+            nano \
+            htop \
+            net-tools
+          
+          echo "✓ XFCE Desktop installed successfully!"
+
+      - name: Configure XRDP
+        run: |
+          echo "Configuring XRDP for optimal performance..."
+          
+          # Configure XRDP to use XFCE
+          sudo bash -c 'cat > /etc/xrdp/startwm.sh << EOF
+#!/bin/sh
+if [ -r /etc/default/locale ]; then
+  . /etc/default/locale
+  export LANG LANGUAGE
+fi
+startxfce4
+EOF'
+          
+          sudo chmod +x /etc/xrdp/startwm.sh
+          
+          # Optimize XRDP settings for better performance
+          sudo sed -i 's/max_bpp=32/max_bpp=24/' /etc/xrdp/xrdp.ini
+          sudo sed -i 's/xserverbpp=24/xserverbpp=24/' /etc/xrdp/xrdp.ini
+          
+          # Enable XRDP service
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
+          
+          # Allow RDP through firewall
+          sudo ufw allow 3389/tcp
+          
+          echo "✓ XRDP configured and started!"
+
+      - name: Create RDP User
+        run: |
+          USERNAME="rdpuser"
+          PASSWORD="Ricardo159447!"
+          
+          echo "Creating user: $USERNAME"
+          
+          # Create user with home directory
+          sudo useradd -m -s /bin/bash $USERNAME
+          
+          # Set password
+          echo "$USERNAME:$PASSWORD" | sudo chpasswd
+          
+          # Add to sudo group for admin privileges
+          sudo usermod -aG sudo $USERNAME
+          
+          # Save credentials to environment
+          echo "RDP_USERNAME=$USERNAME" >> $GITHUB_ENV
+          echo "RDP_PASSWORD=$PASSWORD" >> $GITHUB_ENV
+          
+          echo "✓ User created successfully!"
+
       - name: Install Tailscale
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
-      - name: Establish Tailscale Connection
+          echo "Installing Tailscale..."
+          
+          # Add Tailscale repository
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+          
+          # Install Tailscale
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tailscale
+          
+          echo "✓ Tailscale installed!"
+
+      - name: Connect to Tailscale Network
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
-          }
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
-              exit 1
-          }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-      - name: Verify RDP Accessibility
+          echo "Connecting to Tailscale..."
+          
+          HOSTNAME="ubuntu-rdp-$GITHUB_RUN_ID"
+          
+          # Start Tailscale with auth key
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=$HOSTNAME
+          
+          # Wait for IP assignment
+          echo "Waiting for Tailscale IP..."
+          RETRY=0
+          MAX_RETRIES=20
+          
+          while [ $RETRY -lt $MAX_RETRIES ]; do
+            TAILSCALE_IP=$(tailscale ip -4 2>/dev/null)
+            if [ -n "$TAILSCALE_IP" ]; then
+              echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
+              echo "✓ Connected! IP: $TAILSCALE_IP"
+              break
+            fi
+            echo "Attempt $((RETRY+1))/$MAX_RETRIES..."
+            sleep 3
+            RETRY=$((RETRY+1))
+          done
+          
+          if [ -z "$TAILSCALE_IP" ]; then
+            echo "✗ Failed to get Tailscale IP"
+            exit 1
+          fi
+
+      - name: Verify RDP Service
         run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-          Write-Host "TCP connectivity successful!"
-      - name: Maintain Connection
+          echo "Verifying XRDP service status..."
+          
+          # Check if XRDP is running
+          if sudo systemctl is-active --quiet xrdp; then
+            echo "✓ XRDP service is running"
+          else
+            echo "✗ XRDP service is not running"
+            sudo systemctl status xrdp
+            exit 1
+          fi
+          
+          # Check if port 3389 is listening
+          if sudo netstat -tuln | grep -q ":3389"; then
+            echo "✓ RDP port 3389 is listening"
+          else
+            echo "✗ RDP port 3389 is not listening"
+            exit 1
+          fi
+
+      - name: Display Connection Details
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: RDP"
-          Write-Host "Password: $(echo $env:RDP_CREDS)"
-          Write-Host "==================`n"
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
-              Start-Sleep -Seconds 300
-          }
+          echo ""
+          echo "╔════════════════════════════════════════════════════╗"
+          echo "║         UBUNTU RDP CONNECTION DETAILS              ║"
+          echo "╠════════════════════════════════════════════════════╣"
+          echo "║ IP Address : $TAILSCALE_IP"
+          echo "║ Username   : $RDP_USERNAME"
+          echo "║ Password   : $RDP_PASSWORD"
+          echo "║ Port       : 3389"
+          echo "╠════════════════════════════════════════════════════╣"
+          echo "║ Desktop    : XFCE4 (Lightweight)"
+          echo "║ OS         : Ubuntu $(lsb_release -rs)"
+          echo "║ Duration   : 6 hours (360 minutes)"
+          echo "╠════════════════════════════════════════════════════╣"
+          echo "║ Connect using: Remote Desktop Client              ║"
+          echo "║ Linux: rdesktop $TAILSCALE_IP"
+          echo "║ Windows: mstsc.exe /v:$TAILSCALE_IP"
+          echo "╚════════════════════════════════════════════════════╝"
+          echo ""
+
+      - name: Keep Session Alive (6 Hours)
+        run: |
+          START_TIME=$(date +%s)
+          DURATION_MINUTES=${{ github.event.inputs.session_duration || 360 }}
+          DURATION_SECONDS=$((DURATION_MINUTES * 60))
+          END_TIME=$((START_TIME + DURATION_SECONDS))
+          
+          echo "Session started at $(date)"
+          echo "Will run for $DURATION_MINUTES minutes (6 hours)"
+          echo "Session will end at $(date -d @$END_TIME)"
+          echo ""
+          echo "Press 'Cancel workflow' in GitHub Actions to terminate early"
+          echo "========================================================"
+          echo ""
+          
+          COUNTER=0
+          
+          while [ $(date +%s) -lt $END_TIME ]; do
+            CURRENT_TIME=$(date +%s)
+            ELAPSED=$((CURRENT_TIME - START_TIME))
+            REMAINING=$((END_TIME - CURRENT_TIME))
+            
+            ELAPSED_MIN=$((ELAPSED / 60))
+            REMAINING_MIN=$((REMAINING / 60))
+            
+            # Display status every minute
+            if [ $((COUNTER % 60)) -eq 0 ]; then
+              echo "[$(date '+%H:%M:%S')] Session Active | Elapsed: ${ELAPSED_MIN}m | Remaining: ${REMAINING_MIN}m"
+              
+              # Show system resources every 5 minutes
+              if [ $((COUNTER % 300)) -eq 0 ]; then
+                echo "  ├─ CPU Load: $(uptime | awk -F'load average:' '{print $2}')"
+                echo "  ├─ RAM Used: $(free -h | awk '/^Mem:/ {print $3 "/" $2}')"
+                echo "  └─ Disk Used: $(df -h / | awk 'NR==2 {print $3 "/" $2}')"
+              fi
+              
+              # Check for active RDP sessions
+              ACTIVE_SESSIONS=$(who | grep -c "pts" || true)
+              if [ $ACTIVE_SESSIONS -gt 0 ]; then
+                echo "  └─ Active connections: $ACTIVE_SESSIONS"
+              fi
+            fi
+            
+            # Keep Tailscale alive
+            if [ $((COUNTER % 120)) -eq 0 ]; then
+              tailscale status > /dev/null 2>&1 || sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }}
+            fi
+            
+            sleep 1
+            COUNTER=$((COUNTER + 1))
+          done
+          
+          echo ""
+          echo "========================================================"
+          echo "Session completed at $(date)"
+          echo "Total runtime: $DURATION_MINUTES minutes"
+          echo "========================================================"
+
+      - name: Cleanup (On Failure)
+        if: failure()
+        run: |
+          echo "Cleaning up after failure..."
+          sudo tailscale down || true
+          sudo systemctl stop xrdp || true
