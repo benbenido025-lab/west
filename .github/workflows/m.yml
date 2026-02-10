@@ -1,55 +1,40 @@
-name: Ubuntu-RDP-6HR
+name: Multi-Ubuntu-RDP
 on:
   workflow_dispatch:
     inputs:
+      instance_count:
+        description: 'Number of RDP instances (1-10)'
+        required: true
+        default: '3'
       session_duration:
         description: 'Session duration (minutes)'
         required: false
         default: '360'
 
 jobs:
-  ubuntu-rdp:
+  ubuntu-rdp-1:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
     steps:
-      - name: System Information
+      - name: Setup RDP Instance 1
         run: |
           echo "================================"
-          echo "    SYSTEM SPECIFICATIONS"
+          echo "    RDP INSTANCE #1"
           echo "================================"
           echo "OS: $(lsb_release -d | cut -f2)"
-          echo "Kernel: $(uname -r)"
-          echo "CPU: $(lscpu | grep 'Model name' | cut -d ':' -f2 | xargs)"
-          echo "Cores: $(nproc)"
+          echo "CPU: $(nproc) cores"
           echo "RAM: $(free -h | awk '/^Mem:/ {print $2}')"
-          echo "Disk: $(df -h / | awk 'NR==2 {print $2}')"
-          echo "Free Space: $(df -h / | awk 'NR==2 {print $4}')"
           echo "================================"
 
-      - name: Update System & Install XFCE Desktop
+      - name: Install XFCE Desktop
         run: |
-          echo "Updating package lists..."
           sudo apt-get update -qq
-          
-          echo "Installing XFCE desktop environment (lightweight)..."
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-            xfce4 \
-            xfce4-goodies \
-            dbus-x11 \
-            xorg \
-            xrdp \
-            firefox \
-            nano \
-            htop \
-            net-tools
-          
-          echo "✓ XFCE Desktop installed successfully!"
+            xfce4 xfce4-goodies dbus-x11 xorg xrdp firefox nano htop net-tools
 
       - name: Configure XRDP
         run: |
-          echo "Configuring XRDP for optimal performance..."
-          
           sudo tee /etc/xrdp/startwm.sh > /dev/null << 'EOF'
           #!/bin/sh
           if [ -r /etc/default/locale ]; then
@@ -60,154 +45,238 @@ jobs:
           EOF
           
           sudo chmod +x /etc/xrdp/startwm.sh
-          
           sudo sed -i 's/max_bpp=32/max_bpp=24/' /etc/xrdp/xrdp.ini
-          sudo sed -i 's/xserverbpp=24/xserverbpp=24/' /etc/xrdp/xrdp.ini
-          
           sudo systemctl enable xrdp
           sudo systemctl start xrdp
-          
           sudo ufw allow 3389/tcp
-          
-          echo "✓ XRDP configured and started!"
 
-      - name: Create RDP User
+      - name: Create User
         run: |
-          USERNAME="rdpuser"
-          PASSWORD="Ricardo159447!"
-          
-          echo "Creating user: $USERNAME"
-          
-          sudo useradd -m -s /bin/bash $USERNAME
-          
-          echo "$USERNAME:$PASSWORD" | sudo chpasswd
-          
-          sudo usermod -aG sudo $USERNAME
-          
-          echo "RDP_USERNAME=$USERNAME" >> $GITHUB_ENV
-          echo "RDP_PASSWORD=$PASSWORD" >> $GITHUB_ENV
-          
-          echo "✓ User created successfully!"
+          sudo useradd -m -s /bin/bash rdp1
+          echo "rdp1:Pass1234!" | sudo chpasswd
+          sudo usermod -aG sudo rdp1
+          echo "RDP_USER_1=rdp1" >> $GITHUB_ENV
+          echo "RDP_PASS_1=Pass1234!" >> $GITHUB_ENV
 
       - name: Install Tailscale
         run: |
-          echo "Installing Tailscale..."
-          
           curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
           curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
-          
           sudo apt-get update -qq
           sudo apt-get install -y -qq tailscale
-          
-          echo "✓ Tailscale installed!"
 
-      - name: Connect to Tailscale Network
+      - name: Connect Tailscale
         run: |
-          echo "Connecting to Tailscale..."
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=rdp-instance-1
           
-          HOSTNAME="ubuntu-rdp-$GITHUB_RUN_ID"
-          
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=$HOSTNAME
-          
-          echo "Waiting for Tailscale IP..."
           RETRY=0
-          MAX_RETRIES=20
-          
-          while [ $RETRY -lt $MAX_RETRIES ]; do
+          while [ $RETRY -lt 20 ]; do
             TAILSCALE_IP=$(tailscale ip -4 2>/dev/null)
             if [ -n "$TAILSCALE_IP" ]; then
-              echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
-              echo "✓ Connected! IP: $TAILSCALE_IP"
+              echo "TAILSCALE_IP_1=$TAILSCALE_IP" >> $GITHUB_ENV
+              echo "✓ Instance 1 IP: $TAILSCALE_IP"
               break
             fi
-            echo "Attempt $((RETRY+1))/$MAX_RETRIES..."
             sleep 3
             RETRY=$((RETRY+1))
           done
-          
-          if [ -z "$TAILSCALE_IP" ]; then
-            echo "✗ Failed to get Tailscale IP"
-            exit 1
-          fi
 
-      - name: Verify RDP Service
-        run: |
-          echo "Verifying XRDP service..."
-          
-          if sudo systemctl is-active --quiet xrdp; then
-            echo "✓ XRDP service is running"
-          else
-            echo "✗ XRDP service is not running"
-            sudo systemctl status xrdp
-            exit 1
-          fi
-          
-          if sudo netstat -tuln | grep -q ":3389"; then
-            echo "✓ RDP port 3389 is listening"
-          else
-            echo "✗ RDP port 3389 is not listening"
-            exit 1
-          fi
-
-      - name: Display Connection Details
+      - name: Display Info
         run: |
           echo ""
-          echo "╔════════════════════════════════════════════════════╗"
-          echo "║         UBUNTU RDP CONNECTION DETAILS              ║"
-          echo "╠════════════════════════════════════════════════════╣"
-          echo "║ IP Address : $TAILSCALE_IP"
-          echo "║ Username   : $RDP_USERNAME"
-          echo "║ Password   : $RDP_PASSWORD"
-          echo "║ Port       : 3389"
-          echo "╠════════════════════════════════════════════════════╣"
-          echo "║ Desktop    : XFCE4 (Lightweight)"
-          echo "║ OS         : Ubuntu $(lsb_release -rs)"
-          echo "║ Duration   : 6 hours (360 minutes)"
-          echo "╠════════════════════════════════════════════════════╣"
-          echo "║ Connect using Remote Desktop Client:              ║"
-          echo "║ Address: $TAILSCALE_IP:3389"
-          echo "╚════════════════════════════════════════════════════╝"
-          echo ""
+          echo "╔════════════════════════════════════════╗"
+          echo "║       RDP INSTANCE #1                  ║"
+          echo "╠════════════════════════════════════════╣"
+          echo "║ IP       : $TAILSCALE_IP_1"
+          echo "║ Username : $RDP_USER_1"
+          echo "║ Password : $RDP_PASS_1"
+          echo "╚════════════════════════════════════════╝"
 
-      - name: Keep Session Alive (6 Hours)
+      - name: Keep Alive
         run: |
-          START_TIME=$(date +%s)
-          DURATION_MINUTES=${{ github.event.inputs.session_duration || 360 }}
-          DURATION_SECONDS=$((DURATION_MINUTES * 60))
-          END_TIME=$((START_TIME + DURATION_SECONDS))
+          START=$(date +%s)
+          DURATION=$((360 * 60))
+          END=$((START + DURATION))
           
-          echo "Session started at $(date)"
-          echo "Will run for $DURATION_MINUTES minutes (6 hours)"
-          echo "========================================================"
-          echo ""
-          
-          COUNTER=0
-          
-          while [ $(date +%s) -lt $END_TIME ]; do
-            CURRENT_TIME=$(date +%s)
-            ELAPSED=$((CURRENT_TIME - START_TIME))
-            REMAINING=$((END_TIME - CURRENT_TIME))
-            
-            ELAPSED_MIN=$((ELAPSED / 60))
-            REMAINING_MIN=$((REMAINING / 60))
-            
-            if [ $((COUNTER % 60)) -eq 0 ]; then
-              echo "[$(date '+%H:%M:%S')] Active | Elapsed: ${ELAPSED_MIN}m | Remaining: ${REMAINING_MIN}m"
-              
-              if [ $((COUNTER % 300)) -eq 0 ]; then
-                echo "  ├─ RAM: $(free -h | awk '/^Mem:/ {print $3 "/" $2}')"
-                echo "  └─ Disk: $(df -h / | awk 'NR==2 {print $3 "/" $2}')"
-              fi
-            fi
-            
-            if [ $((COUNTER % 120)) -eq 0 ]; then
-              tailscale status > /dev/null 2>&1 || sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }}
-            fi
-            
-            sleep 1
-            COUNTER=$((COUNTER + 1))
+          while [ $(date +%s) -lt $END ]; do
+            ELAPSED=$((($(date +%s) - START) / 60))
+            REMAIN=$(((END - $(date +%s)) / 60))
+            echo "[Instance 1] Active | ${ELAPSED}m elapsed | ${REMAIN}m remaining"
+            sleep 60
           done
+
+  ubuntu-rdp-2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    if: ${{ github.event.inputs.instance_count >= 2 }}
+    
+    steps:
+      - name: Setup RDP Instance 2
+        run: |
+          echo "================================"
+          echo "    RDP INSTANCE #2"
+          echo "================================"
+
+      - name: Install XFCE Desktop
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            xfce4 xfce4-goodies dbus-x11 xorg xrdp firefox nano htop net-tools
+
+      - name: Configure XRDP
+        run: |
+          sudo tee /etc/xrdp/startwm.sh > /dev/null << 'EOF'
+          #!/bin/sh
+          if [ -r /etc/default/locale ]; then
+            . /etc/default/locale
+            export LANG LANGUAGE
+          fi
+          startxfce4
+          EOF
           
+          sudo chmod +x /etc/xrdp/startwm.sh
+          sudo sed -i 's/max_bpp=32/max_bpp=24/' /etc/xrdp/xrdp.ini
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
+          sudo ufw allow 3389/tcp
+
+      - name: Create User
+        run: |
+          sudo useradd -m -s /bin/bash rdp2
+          echo "rdp2:Pass1234!" | sudo chpasswd
+          sudo usermod -aG sudo rdp2
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tailscale
+
+      - name: Connect Tailscale
+        run: |
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=rdp-instance-2
+          
+          RETRY=0
+          while [ $RETRY -lt 20 ]; do
+            TAILSCALE_IP=$(tailscale ip -4 2>/dev/null)
+            if [ -n "$TAILSCALE_IP" ]; then
+              echo "✓ Instance 2 IP: $TAILSCALE_IP"
+              break
+            fi
+            sleep 3
+            RETRY=$((RETRY+1))
+          done
+
+      - name: Display Info
+        run: |
+          TAILSCALE_IP=$(tailscale ip -4)
           echo ""
-          echo "========================================================"
-          echo "Session completed at $(date)"
+          echo "╔════════════════════════════════════════╗"
+          echo "║       RDP INSTANCE #2                  ║"
+          echo "╠════════════════════════════════════════╣"
+          echo "║ IP       : $TAILSCALE_IP"
+          echo "║ Username : rdp2"
+          echo "║ Password : Pass1234!"
+          echo "╚════════════════════════════════════════╝"
+
+      - name: Keep Alive
+        run: |
+          START=$(date +%s)
+          DURATION=$((360 * 60))
+          END=$((START + DURATION))
+          
+          while [ $(date +%s) -lt $END ]; do
+            ELAPSED=$((($(date +%s) - START) / 60))
+            REMAIN=$(((END - $(date +%s)) / 60))
+            echo "[Instance 2] Active | ${ELAPSED}m elapsed | ${REMAIN}m remaining"
+            sleep 60
+          done
+
+  ubuntu-rdp-3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    if: ${{ github.event.inputs.instance_count >= 3 }}
+    
+    steps:
+      - name: Setup RDP Instance 3
+        run: |
+          echo "================================"
+          echo "    RDP INSTANCE #3"
+          echo "================================"
+
+      - name: Install XFCE Desktop
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            xfce4 xfce4-goodies dbus-x11 xorg xrdp firefox nano htop net-tools
+
+      - name: Configure XRDP
+        run: |
+          sudo tee /etc/xrdp/startwm.sh > /dev/null << 'EOF'
+          #!/bin/sh
+          if [ -r /etc/default/locale ]; then
+            . /etc/default/locale
+            export LANG LANGUAGE
+          fi
+          startxfce4
+          EOF
+          
+          sudo chmod +x /etc/xrdp/startwm.sh
+          sudo sed -i 's/max_bpp=32/max_bpp=24/' /etc/xrdp/xrdp.ini
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
+          sudo ufw allow 3389/tcp
+
+      - name: Create User
+        run: |
+          sudo useradd -m -s /bin/bash rdp3
+          echo "rdp3:Pass1234!" | sudo chpasswd
+          sudo usermod -aG sudo rdp3
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tailscale
+
+      - name: Connect Tailscale
+        run: |
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=rdp-instance-3
+          
+          RETRY=0
+          while [ $RETRY -lt 20 ]; do
+            TAILSCALE_IP=$(tailscale ip -4 2>/dev/null)
+            if [ -n "$TAILSCALE_IP" ]; then
+              echo "✓ Instance 3 IP: $TAILSCALE_IP"
+              break
+            fi
+            sleep 3
+            RETRY=$((RETRY+1))
+          done
+
+      - name: Display Info
+        run: |
+          TAILSCALE_IP=$(tailscale ip -4)
+          echo ""
+          echo "╔════════════════════════════════════════╗"
+          echo "║       RDP INSTANCE #3                  ║"
+          echo "╠════════════════════════════════════════╣"
+          echo "║ IP       : $TAILSCALE_IP"
+          echo "║ Username : rdp3"
+          echo "║ Password : Pass1234!"
+          echo "╚════════════════════════════════════════╝"
+
+      - name: Keep Alive
+        run: |
+          START=$(date +%s)
+          DURATION=$((360 * 60))
+          END=$((START + DURATION))
+          
+          while [ $(date +%s) -lt $END ]; do
+            ELAPSED=$((($(date +%s) - START) / 60))
+            REMAIN=$(((END - $(date +%s)) / 60))
+            echo "[Instance 3] Active | ${ELAPSED}m elapsed | ${REMAIN}m remaining"
+            sleep 60
+          done
