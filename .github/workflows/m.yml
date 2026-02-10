@@ -50,27 +50,23 @@ jobs:
         run: |
           echo "Configuring XRDP for optimal performance..."
           
-          # Configure XRDP to use XFCE
-          sudo bash -c 'cat > /etc/xrdp/startwm.sh << EOF
-#!/bin/sh
-if [ -r /etc/default/locale ]; then
-  . /etc/default/locale
-  export LANG LANGUAGE
-fi
-startxfce4
-EOF'
+          sudo tee /etc/xrdp/startwm.sh > /dev/null << 'EOF'
+          #!/bin/sh
+          if [ -r /etc/default/locale ]; then
+            . /etc/default/locale
+            export LANG LANGUAGE
+          fi
+          startxfce4
+          EOF
           
           sudo chmod +x /etc/xrdp/startwm.sh
           
-          # Optimize XRDP settings
           sudo sed -i 's/max_bpp=32/max_bpp=24/' /etc/xrdp/xrdp.ini
           sudo sed -i 's/xserverbpp=24/xserverbpp=24/' /etc/xrdp/xrdp.ini
           
-          # Enable XRDP service
           sudo systemctl enable xrdp
           sudo systemctl start xrdp
           
-          # Allow RDP through firewall
           sudo ufw allow 3389/tcp
           
           echo "✓ XRDP configured and started!"
@@ -82,16 +78,12 @@ EOF'
           
           echo "Creating user: $USERNAME"
           
-          # Create user with home directory
           sudo useradd -m -s /bin/bash $USERNAME
           
-          # Set password
           echo "$USERNAME:$PASSWORD" | sudo chpasswd
           
-          # Add to sudo group
           sudo usermod -aG sudo $USERNAME
           
-          # Save credentials
           echo "RDP_USERNAME=$USERNAME" >> $GITHUB_ENV
           echo "RDP_PASSWORD=$PASSWORD" >> $GITHUB_ENV
           
